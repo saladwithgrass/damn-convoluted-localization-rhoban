@@ -1,409 +1,110 @@
-#include "Filters/Pipeline.hpp"
-#include "Filters/Custom/WhiteLines.hpp"
-#include <opencv2/imgproc/imgproc.hpp>
-#include "CameraState/CameraState.hpp"
-#include "robocup_referee/constants.h"
-#include <rhoban_utils/util.h>
-#include "rhoban_utils/timing/benchmark.h"
-#include <rhoban_utils/logging/logger.h>
+int CameraState::lineInfoFromPixel(
+        const cv::Point2f& pos, 
+        float* dx, float* dy, 
+        int* px0, int* py0, 
+        int* px1, int* py1,
+        int* px2, int* py2, 
+        int* px3, int* py3, 
+        double angularPitchError) {
+  // Ray cameraCentralRay = getRayInWorldFromPixel(cv::Point2f(getImgSize().width/2, getImgSize().height/2));
 
-#define USE_LINES 1
-#define USE_CORNERS 1
+  Ray cameraCentralRay = 
+      getRayInWorldFromPixel(cv::Point2f(getImgSize().width / 2, 0));
+  // Ray cameraCentralRay = getRayInWorldFromPixel(pos);
+  // Ray consist of source and dir, both Eigen3D
 
+  Eigen::Vector3d forwardDir = Eigen::Vector3d(cameraCentralRay.dir(0), cameraCentralRay.dir(1), 0.0).normalized();
+  Eigen::Vector3d leftDir = Eigen::Vector3d(cameraCentralRay.dir(1), -cameraCentralRay.dir(0), 0.0).normalized();
+  // Eigen::Vector3d leftDir = Eigen::Vector3d(0.0, 0.0, 0.0);
+  // Eigen::Vector3d leftDir = viewRay.dir.cross(groundDir).normalized();
 
-//#include <opencv2/ximgproc.hpp>
-
-/*
-  Json usage example (in clipping.json):
-    {
-        "class name" : "WhiteLines",
-        "content" : {
-            "name" : "whiteLinesDetector",
-            "display" : true,
-            "dependencies" : ["Y", "integralY", "greenHSV"]
-
-        }
-    }
-  integralY shold be raw Y integral transform, not yNoRobot as is default 2019 env (!)
- */
-
-struct CornerCandiate
-{
-  //All in normalised coords (0..1 span on x and y)
-  cv::Point2f ufa;
-  cv::Point2f vfa;
-  cv::Point2f ufb;
-  cv::Point2f vfb;
-  cv::Point2f corner;
-  double score;
-  bool valid;
-};
-
-using namespace std;
-using namespace cv;
-using robocup_referee::Constants;    
-
-namespace Vision {
-namespace Filters {
-
-WhiteLines::WhiteLines() : Filter("WhiteLines") {}
-
-WhiteLines::~WhiteLines() {}
-  
-void WhiteLines::setParameters() {
-}
-
-
-double WhiteLines::my_norm(cv::Point2f a, cv::Point2f b) {
-  return sqrt( (a.x-b.x)*(a.x-b.x) + (a.y-b.y)*(a.y-b.y) );
-}
-
-// Returns 1 if the lines intersect, otherwise 0. In addition, if the lines 
-// intersect the intersection point may be stored in the floats i_x and i_y.
-char WhiteLines::get_line_intersection(float p0_x, float p0_y, float p1_x, float p1_y, 
-    float p2_x, float p2_y, float p3_x, float p3_y, float *i_x, float *i_y)
-{
-    float s1_x, s1_y, s2_x, s2_y;
-    s1_x = p1_x - p0_x;     s1_y = p1_y - p0_y;
-    s2_x = p3_x - p2_x;     s2_y = p3_y - p2_y;
-
-    float s, t;
-    float ds,dt;
-    ds = (-s2_x * s1_y + s1_x * s2_y);
-    dt = (-s2_x * s1_y + s1_x * s2_y);
-    
-    if((ds!=0)&&(dt!=0)) {
-
-	    s = (-s1_y * (p0_x - p2_x) + s1_x * (p0_y - p2_y)) / ds;
-	    t = ( s2_x * (p0_y - p2_y) - s2_y * (p0_x - p2_x)) / dt;
-
-	    if (s >= 0 && s <= 1 && t >= 0 && t <= 1)
-	    {
-		// Collision detected
-		if (i_x != NULL)
-		    *i_x = p0_x + (t * s1_x);
-		if (i_y != NULL)
-		    *i_y = p0_y + (t * s1_y);
-		return 1;
-	    }
-    }
-
-    return 0; // No collision
-}
-
-int WhiteLines::getRegionSum(Mat isum, int x, int y, int w, int h) {
-
-      int tl= isum.at<int>(y,x);
-      int tr= isum.at<int>(y,x+w);
-      int bl= isum.at<int>(y+h,x);
-      int br= isum.at<int>(y+h,x+w);
-      return br-bl-tr+tl;
-}
-
-void WhiteLines::non_maxima_suppression(const cv::Mat& image, cv::Mat& mask, int sizex, int sizey, int threshold) {
-    // find pixels that are equal to the local neighborhood not maximum (including 'plateaus')
-    Mat kernel = getStructuringElement(cv::MORPH_RECT, Size(sizex,sizey));
-    //cv::dilate(image, mask, cv::Mat());
-    cv::dilate(image, mask, kernel);
-    for(int y=0; y < image.rows; y++) {
-      for(int x=0; x < image.cols; x++) {
-        if((image.at<uchar>(y,x) < mask.at<uchar>(y,x)) || (image.at<uchar>(y,x)<threshold) ) mask.at<uchar>(y,x) = 0;
-        else mask.at<uchar>(y,x) = 255;
-      }
-    }
-}
-
-void WhiteLines::get_plane_equation(
-        double x1, double y1, double z1, 
-        double x2, double y2, double z2,  
-        double x3, double y3, double z3,
-        double *ra, double *rb, double *rc, double *rd) 
-{ 
-  //taken from https://www.geeksforgeeks.org/program-to-find-equation-of-a-plane-passing-through-3-points/
-    double a1 = x2 - x1; 
-    double b1 = y2 - y1; 
-    double c1 = z2 - z1; 
-    double a2 = x3 - x1; 
-    double b2 = y3 - y1; 
-    double c2 = z3 - z1; 
-    double a,b,c,d;
-    a = b1 * c2 - b2 * c1; 
-    b = a2 * c1 - a1 * c2; 
-    c = a1 * b2 - b1 * a2; 
-    d = (- a * x1 - b * y1 - c * z1); 
-    *ra = a;
-    *rb = b;
-    *rc = c;
-    *rd = d;
-} 
-
-
-float WhiteLines::get_line2line_angle(float x1, float y1, float x2, float y2, float x3, float y3, float x4, float y4) //in radians
-{
-	float a = x1 - x2;
-	float b = y1 - y2;
-	float c = x3 - x4;
-	float d = y3 - y4;
-	//
-	float cos_angle , angle;
-	float mag_v1 = sqrt(a*a + b*b);
-	float mag_v2 = sqrt(c*c + d*d);
-	if((mag_v1 * mag_v2)!=0) {
-		cos_angle = (a*c + b*d) / (mag_v1 * mag_v2);
-		if(fabs(cos_angle)>1) return 0;
-		angle = acos(cos_angle);
-		return angle;
-	}
-	return 0;
-}
-
-
-//Rewritten from https://stackoverflow.com/questions/45531074/how-to-merge-lines-after-houghlinesp
-float WhiteLines::get_line_magnitude(float x1, float y1, float x2, float y2) {
-  //Get line (aka vector) length'
-  return sqrt(pow((x2 - x1), 2) + pow((y2 - y1), 2));
-}
-
-float WhiteLines::get_point2line_distance(float px, float py, float x1, float y1, float x2, float y2) {
-  //Get distance between point and line
-  //http://local.wasp.uwa.edu.au/~pbourke/geometry/pointline/source.vba
-
-  float LineMag = get_line_magnitude(x1, y1, x2, y2);
-  if (LineMag < 0.00000001) return 9999; //line are too short for proper computations
-
-  float u1 = (((px - x1) * (x2 - x1)) + ((py - y1) * (y2 - y1)));
-  float u = u1 / (LineMag * LineMag);
-
-  if ((u < 0.00001) || (u > 1)) {
-    // point does not fall within the line segment, take the shorter distance to an endpoint
-    float ix = get_line_magnitude(px, py, x1, y1);
-    float iy = get_line_magnitude(px, py, x2, y2);
-    return std::min(ix,iy);
-  } else {
-    //Intersecting point is on the line, use the formula
-    float ix = x1 + u * (x2 - x1);
-    float iy = y1 + u * (y2 - y1);
-    return get_line_magnitude(px, py, ix, iy);
-  }
-}
-
-float WhiteLines::get_segnent2segment_distance(float xa1, float ya1, float xa2, float ya2, float xb1, float yb1, float xb2, float yb2) {
-  //Get all possible distances between each dot of two lines and second line and return the shortest
-  float dist1 = get_point2line_distance(xa1,ya1, xb1, yb1, xb2, yb2);
-  float dist2 = get_point2line_distance(xa2,ya2, xb1, yb1, xb2, yb2);
-  float dist3 = get_point2line_distance(xb1,yb1, xa1, ya1, xa2, ya2);
-  float dist4 = get_point2line_distance(xb2,yb2, xa1, ya1, xa2, ya2);
-
-  return std::min(std::min(dist1, dist2), std::min(dist3, dist4));
-}
-
-void WhiteLines::merge_two_segments(float xa1, float ya1, float xa2, float ya2, 
-                        float xb1, float yb1, float xb2, float yb2, 
-                        float *xr1, float *yr1, float *xr2, float *yr2) 
-{
-  //Dumb merging of two segments by removing two points closest to centroid
-  float centroid_x = (xa1+xa2+xb1+xb2)/4.0;
-  float centroid_y = (ya1+ya2+yb1+yb2)/4.0;
-  float dist[4];
-  dist[0] = get_line_magnitude(xa1,ya1, centroid_x, centroid_y);
-  dist[1] = get_line_magnitude(xa2,ya2, centroid_x, centroid_y);
-  dist[2] = get_line_magnitude(xb1,yb1, centroid_x, centroid_y);
-  dist[3] = get_line_magnitude(xb2,yb2, centroid_x, centroid_y);
-
-  float max_dist1 = 0;
-  int max_dist1_index = 0;
-  for(int i=0;i<4;i++) {
-    if(dist[i]>max_dist1) {
-      max_dist1 = dist[i];
-      max_dist1_index = i;      
-    }
-  }
-  //std::cout << "max_dist1_index=" << max_dist1_index << std::endl;
-  if(max_dist1_index==0) { *xr1 = xa1; *yr1 = ya1; }
-  if(max_dist1_index==1) { *xr1 = xa2; *yr1 = ya2; }
-  if(max_dist1_index==2) { *xr1 = xb1; *yr1 = yb1; }
-  if(max_dist1_index==3) { *xr1 = xb2; *yr1 = yb2; }
-
-  dist[max_dist1_index] = 0; //to skip this point in next iteration  
-  float max_dist2 = 0;
-  int max_dist2_index = 0;
-  for(int i=0;i<4;i++) {
-    if(dist[i]>max_dist2) {
-      max_dist2 = dist[i];
-      max_dist2_index = i;      
-    }
-  }  
-  if(max_dist2_index==0) { *xr2 = xa1; *yr2 = ya1; }
-  if(max_dist2_index==1) { *xr2 = xa2; *yr2 = ya2; }
-  if(max_dist2_index==2) { *xr2 = xb1; *yr2 = yb1; }
-  if(max_dist2_index==3) { *xr2 = xb2; *yr2 = yb2; }
-
-  //std::cout << "Merging " << cv::Point2f(xa1,ya1) << "-" << cv::Point2f(xa2,ya2) << " and " << cv::Point2f(xb1,yb1) << "-" << cv::Point2f(xb2,yb2) << " to " << cv::Point2f(*xr1,*yr1) << "-" << cv::Point2f(*xr2,*yr2) << std::endl;
-}
-
-void WhiteLines::get_circle(cv::Point2f p1,cv::Point2f p2,cv::Point2f p3, cv::Point2f& center, float& radius)
-{
-  double x1 = p1.x;
-  double x2 = p2.x;
-  double x3 = p3.x;
-
-  double y1 = p1.y;
-  double y2 = p2.y;
-  double y3 = p3.y;
-
-  radius = 0;
-
-  center.x = (x1*x1+y1*y1)*(y2-y3) + (x2*x2+y2*y2)*(y3-y1) + (x3*x3+y3*y3)*(y1-y2);
-  double divx = ( 2*(x1*(y2-y3) - y1*(x2-x3) + x2*y3 - x3*y2) );
-  if(divx==0) return;
-  center.x /= divx;
-
-  center.y = (x1*x1 + y1*y1)*(x3-x2) + (x2*x2+y2*y2)*(x1-x3) + (x3*x3 + y3*y3)*(x2-x1);
-  double divy = ( 2*(x1*(y2-y3) - y1*(x2-x3) + x2*y3 - x3*y2) );
-  if(divy==0) return;
-  center.y /= divy;
-
-  radius = sqrt((center.x-x1)*(center.x-x1) + (center.y-y1)*(center.y-y1));
-}
-
-int WhiteLines::get_circle_score(const std::vector<cv::Point2f> ransacInput, cv::Point2f center, float radius) 
-{
-  float targetRadius = Constants::field.center_radius;
-  if( fabs(radius-targetRadius)/targetRadius>0.1) return 0; //circle radius more than 10% different from central circle radius from constants
-  //std::cout << "Verifying circle: center=" << center << ", radius=" << radius << std::endl;
-
-  int score = 0;
-  /*for(int i=0;i<ransacInput.size();i++) {
-    double dist_from_circle_center = my_norm(ransacInput[i], center);
-    if(fabs(dist_from_circle_center - radius) < 0.05) score++;
-  }
-  return score;*/
-  int counter = 0;
-  for(float t = 0; t<2.0*M_PI; t+= 2.0*M_PI/180.0)
+  Ray viewRay = getRayInWorldFromPixel(pos);
+  if (viewRay.dir.z() >= 0)  // Point above horison (z componnet of direction >0)
   {
-    counter++;
-    float cX = radius*cos(t) + center.x;
-    float cY = radius*sin(t) + center.y;
-    bool inlier_found = false;
-    for (int j=0;j<ransacInput.size();j++) {
-      double d =  my_norm(ransacInput[j], cv::Point2f(cX, cY));
-      if(d<0.05/2.0) {
-        inlier_found = true;
-        break;
-      }
-    }
-    if(inlier_found) score++;
+    return -1;
   }
-  return score;
+  Plane groundPlane(Eigen::Vector3d(0, 0, 1), 0.0);
+
+  if (!isIntersectionPoint(viewRay, groundPlane)) {
+    return -1;
+  }
+
+  Eigen::Vector3d posInWorld = getIntersection(viewRay, groundPlane);
+  cv::Point2f pof = cv::Point2f(posInWorld(0), posInWorld(1));
+
+  cv::Point2f shiftxr = cv::Point2f(leftDir(0) * 0.05 / 2, leftDir(1) * 0.05 / 2);
+  cv::Point2f shiftyr = cv::Point2f(forwardDir(0) * 0.05 / 2, forwardDir(1) * 0.05 / 2);
+
+  /*
+  //Calculating vector to shift pixel to half of line width in "x" (from left to right) direction in image taking into
+  account camera Yaw cv::Point2f shiftx = cv::Point2f(0.0, 0.05/2.0); //Shift to the left cv::Point2f shiftxr =
+  cv::Point2f(shiftx.x * cos(getYaw()) - shiftx.y * sin(getYaw()), shiftx.x * sin(getYaw()) + shiftx.y * cos(getYaw())
+  );
+
+  //Calculating vector to shift pixel to half of line width in "y" (from bottom to top) direction in image taking into
+  account camera Yaw
+  //cv::Point2f shifty = cv::Point2f(0.05/2.0, 0.00); //Shift forward
+  cv::Point2f shifty = cv::Point2f(0.0, 0.00); //Shift forward
+  cv::Point2f shiftyr = cv::Point2f(shifty.x * cos(getYaw()) - shifty.y * sin(getYaw()),
+                                   shifty.x * sin(getYaw()) + shifty.y * cos(getYaw()) );
+
+  //cv::Point2f pof = robotPosFromImg(pos.x, pos.y); //Get point on field from pixel coords
+  cv::Point2f pof = worldPosFromImg(pos.x, pos.y); //Get point on field from pixel coords, 2019 version
+  */
+  cv::Point2f pim0sx, pim1sx, pim0sy, pim1sy;
+
+  try {
+    pim0sx = imgXYFromWorldPosition(pof - shiftxr);  // Get pixel coords of shifted point on field
+    pim1sx = imgXYFromWorldPosition(pof + shiftxr);  // Get pixel coords of shifted point on field
+    pim0sy = imgXYFromWorldPosition(pof - shiftyr);  // Get pixel coords of shifted point on field
+    pim1sy = imgXYFromWorldPosition(pof + shiftyr);  // Get pixel coords of shifted point on field
+  } catch (const std::runtime_error& exc) {
+    return -1;
+  }
+
+  /*
+  //cv::Point2f pim0sx = imgXYFromRobotPosition2f(pof - shiftxr, width, height); //Get pixel coords of shifted point on
+  field
+  //cv::Point2f pim1sx = imgXYFromRobotPosition2f(pof + shiftxr, width, height); //Get pixel coords of shifted point on
+  field
+  //cv::Point2f pim0sy = imgXYFromRobotPosition2f(pof - shiftyr, width, height); //Get pixel coords of shifted point on
+  field
+  //cv::Point2f pim1sy = imgXYFromRobotPosition2f(pof + shiftyr, width, height); //Get pixel coords of shifted point on
+  field
+  */
+
+  *px0 = pim0sx.x;
+  *py0 = pim0sx.y;
+  *px1 = pim1sx.x;
+  *py1 = pim1sx.y;
+  *px2 = pim0sy.x;
+  *py2 = pim0sy.y;
+  *px3 = pim1sy.x;
+  *py3 = pim1sy.y;
+
+  // *dx = fabs(pim0sx.x - pim1sx.x);
+  // *dy = fabs(pim0sy.y - pim1sy.y);
+  *dx = sqrt(pow(pim0sx.x - pim1sx.x, 2) + pow(pim0sx.y - pim1sx.y, 2));
+  *dy = sqrt(pow(pim0sy.x - pim1sy.x, 2) + pow(pim0sy.y - pim1sy.y, 2));
+
+  return 0;  // no errors
 }
 
-//RANSAC for circle in real worlds's coords
-int WhiteLines::ransac_circle(std::vector<cv::Point2f> ransacInput, cv::Point2f& center, float& radius)
-{
-    
-    cv::Point2f bestCircleCenter;
-    float bestCircleRadius;
-    int best_circle_inliers = 0;
-
-    int maxNrOfIterations = ransacInput.size();
-
-    for(unsigned int its=0; its< maxNrOfIterations; ++its)
-    {
-        // randomly choose 3 points:
-        unsigned int idx1 = rand() % ransacInput.size();
-        unsigned int idx2 = rand() % ransacInput.size();
-        unsigned int idx3 = rand() % ransacInput.size();
-
-        // we need 3 different samples:
-        if(idx1 == idx2) continue;
-        if(idx1 == idx3) continue;
-        if(idx3 == idx2) continue;
-
-        if( my_norm(ransacInput[idx1], ransacInput[idx2]) < 0.05) continue;
-        if( my_norm(ransacInput[idx1], ransacInput[idx3]) < 0.05) continue;
-        if( my_norm(ransacInput[idx2], ransacInput[idx3]) < 0.05) continue;
-        
-
-        // create circle from 3 points:
-        cv::Point2f c; 
-        float r;
-        get_circle(ransacInput[idx1], ransacInput[idx2], ransacInput[idx3], c, r);
-                
-        //verify or falsify the circle by inlier counting:
-        int inliers = get_circle_score(ransacInput, c, r);
-
-        // update best circle information if necessary
-        if(inliers >= best_circle_inliers)
-        {
-            best_circle_inliers = inliers;
-            bestCircleRadius = r;
-            bestCircleCenter = c;
-        }
-    }
-
-    if(best_circle_inliers > 0) {
-      center = bestCircleCenter;
-      radius = bestCircleRadius;
-      return best_circle_inliers;
-    }
-    return 0;
-}
-
-/*
-  ./prepare.sh starkit4 /home/egor/rhoban/Logs/2019_07_05_19h33m13s 
-  short central circle view, lines+corners localisation OK
-
-  ./prepare.sh starkit4 /home/egor/rhoban/Logs/2019_07_05_04h04m53s
-  SHOWCASE: very subtine lines in corner, but lines+corners localisation OK
-
-  ./prepare.sh starkit4 /home/egor/rhoban/Logs/2019_07_05_04h06m58s - many good points, should be enough for good localisation.
-  lines+corners localisation OK
-
- ./prepare.sh starkit4 /home/egor/rhoban/Logs/2019_07_05_04h09m07s 
- 1st part: goalkeeper with very bad lines quality - works OK in the beginning, not very good in the end (line inside the goals filters out correct candiastes)
- 2nd part: near goals - lines+corners works OK
- 3rd (last) part: near middle T-cross - l+c works OK
-
- ./prepare.sh starkit4 /home/egor/rhoban/Logs/2019_07_05_04h11m08s
- sees a lot of central circle and penalty mark/central cross, with some false positives from another robot's ethernet wire
- works not poerfect, seems that camera angle on robot was wrong
-
- ./prepare.sh starkit4 /home/egor/rhoban/Logs/2019_07_05_12h48m58s - real game from Sydney. Sydney's version gived up, but with lines detection localisation 100% stable!
-
- ./prepare.sh starkit4 /home/egor/rhoban/Logs/2019_07_05_12h52m27s - real game, long jerking in the middle of central circle not able to kick the ball
-
- ./prepare.sh starkit4 /home/egor/rhoban/Logs/2019_07_05_12h52m27s - real game, same as above but oriented to the side
- 
-*/
-
-
-
-                                                                                                          
-
-void WhiteLines::process() 
-{
-
-  //return;
-  Benchmark::open("Converting input image");
+void WhiteLines::process() {
 
   //std::cout << "-------------- WHITE LINES PROCRESS() ENTER ------------" << std::endl;
   Vision::Utils::CameraState *cs = &getCS();
 
-  std::string sourceName = _dependencies[0]; 
+  // should get 
   cv::Mat source = (getDependency(sourceName).getImg())->clone();
 
-  //std::string clippingName = _dependencies[1]; 
-  //cv::Mat clipping = (getDependency(clippingName).getImg())->clone();
-
-  std::string integralYName = _dependencies[1]; 
   cv::Mat integralY = (getDependency(integralYName).getImg())->clone();
 
-  std::string greenName = _dependencies[2]; 
   cv::Mat green = (getDependency(greenName).getImg())->clone();  
 
   int row_nb = source.rows;
   int col_nb = source.cols;
-  //img() = cv::Mat(row_nb, col_nb, CV_8UC3);
+
   //std::cout << "-------------- WHITE LINES PROCRESS() DEPENDENCY GET OK ------------" << std::endl;
   //Defining verbose image
   cv::Mat im(row_nb, col_nb, CV_8UC3, cv::Scalar(0,0,0));
@@ -431,41 +132,10 @@ void WhiteLines::process()
   cv::Mat fieldOnly = cv::Mat(row_nb, col_nb, CV_8UC1);
   fieldOnly.setTo(255);
 
-	Benchmark::close("Converting input image");
-
   //Clipping by horizon
-  /*
-  //Removed to make 2019 project compile, TODO: bring it back
-	int above_horizon_margin_pixels = 20;
-	vector<Point> above_horizon_points;
-  above_horizon_points.push_back(Point(0,0));
-  above_horizon_points.push_back(Point(source.cols - 1, 0));
-  above_horizon_points.push_back(Point(source.cols - 1, cs->getPixelYtAtHorizon(source.cols - 1, source.cols, source.rows) + above_horizon_margin_pixels));
-  above_horizon_points.push_back(Point(0, cs->getPixelYtAtHorizon(0, source.cols, source.rows) + above_horizon_margin_pixels)); 
-	vector<vector<Point> > vpts;
-  vpts.push_back(above_horizon_points);
-  fillPoly( fieldOnly, vpts, Scalar(0, 0, 0), 8, 0 );    */
-	
-  // Clipping by estimated field border from green filter
-  //Field border estimation works bad, so clipping by filed border removed
-  /*
-  int clipping_scale = source.rows / clipping.rows;
-  int clipping_security = row_nb / 20;
-  for (int x=0; x<col_nb; x++) {
-    for (int y=0; y<row_nb; y++) {        
-      if (!(clipping.at<uchar>(y/clipping_scale, x/clipping_scale) > 0 &&
-          clipping.at<uchar>(y/clipping_scale - clipping_security/clipping_scale, x/clipping_scale) > 0 )) {
-        im.at<cv::Vec3b>(y,x) = cv::Vec3b(0,0,0);
-	      fieldOnly.at<uchar>(y,x) = 0;
-      }
-    }
-  }*/
 
-
-  Benchmark::open("Generating linesizeprovider planes");
   //DON'T USE yNoRobot inetgral image as in default 2019 env here, it will contain holes whom will ruin all processing!!!  
   Mat isum = integralY; //Pick ready integral image from rhoban's pipeline
-  //Mat isum; cv::integral(source, isum); //Calculate integral image by ourself 
 
   Mat iresx = Mat(im.rows, im.cols, CV_8UC1);
   Mat iresy = Mat(im.rows, im.cols, CV_8UC1);
@@ -491,7 +161,6 @@ void WhiteLines::process()
   int res1 = cs->lineInfoFromPixel(ls_pim0, &dx0, &dy0, &px0, &py0, &px1, &py1, &px2, &py2, &px3, &py3);
   int res2 = cs->lineInfoFromPixel(ls_pim1, &dx1, &dy1, &px0, &py0, &px1, &py1, &px2, &py2, &px3, &py3);
   int res3 = cs->lineInfoFromPixel(ls_pim2, &dx2, &dy2, &px0, &py0, &px1, &py1, &px2, &py2, &px3, &py3);
-  Benchmark::close("Generating linesizeprovider planes");
   
   if(res1 || res2 || res3) {
     //In case of a point above horizon
@@ -1088,9 +757,4 @@ void WhiteLines::process()
   //std::cout << "-------------- WHITE LINES PROCRESS() EXIT ------------" << std::endl;
   Benchmark::close("computeTransformations");
     
-}
-
-
-
-}
 }

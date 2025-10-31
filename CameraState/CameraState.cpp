@@ -442,8 +442,10 @@ Eigen::Vector3d CameraState::ballInWorldFromPixel(const cv::Point2f& pos, Virtua
   // shoud use zero height here. Live tests pending
 }
 
-rhoban_geometry::Ray CameraState::getRayInWorldFromPixel(const cv::Point2f& img_pos,
-                                                         VirtualCameraTypeEnum cameraType) const {
+rhoban_geometry::Ray CameraState::getRayInWorldFromPixel(
+        const cv::Point2f& img_pos,
+        VirtualCameraTypeEnum cameraType
+) const {
   Eigen::Vector3d viewVectorInCamera = cv2Eigen(getCameraModel(cameraType).getViewVectorFromImg(img_pos));
   Eigen::Vector3d viewVectorInWorld = cameraToWorld.linear() * viewVectorInCamera;
 
@@ -552,9 +554,16 @@ cv::Point2f CameraState::imgXYFromRobotPosition2f(const cv::Point2f &p,
 */
 
 //[Sol]
-int CameraState::lineInfoFromPixel(const cv::Point2f& pos, float* dx, float* dy, int* px0, int* py0, int* px1, int* py1,
-                                   int* px2, int* py2, int* px3, int* py3, double angularPitchError) {
+int CameraState::lineInfoFromPixel(
+        const cv::Point2f& pos, 
+        float* dx, float* dy, 
+        int* px0, int* py0, 
+        int* px1, int* py1,
+        int* px2, int* py2, 
+        int* px3, int* py3, 
+        double angularPitchError) {
   // Ray cameraCentralRay = getRayInWorldFromPixel(cv::Point2f(getImgSize().width/2, getImgSize().height/2));
+
   Ray cameraCentralRay = getRayInWorldFromPixel(cv::Point2f(getImgSize().width / 2, 0));
   // Ray cameraCentralRay = getRayInWorldFromPixel(pos);
   // Ray consist of source and dir, both Eigen3D

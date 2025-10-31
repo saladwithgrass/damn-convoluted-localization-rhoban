@@ -190,13 +190,15 @@ public:
   double getPixelYtAtHorizon(double pixelX, double imgWidth, double imgHeight);
   
   //[Sol]
-  int lineInfoFromPixel(const cv::Point2f &pos,
-                                    float *dx, float *dy,
-                                    int *px0, int *py0,
-                                    int *px1, int *py1,
-                                    int *px2, int *py2,
-                                    int *px3, int *py3,
-                                    double angularPitchError = -1.0);
+  int lineInfoFromPixel(
+          const cv::Point2f &pos,
+          float *dx, float *dy,
+          int *px0, int *py0,
+          int *px1, int *py1,
+          int *px2, int *py2,
+          int *px3, int *py3,
+          double angularPitchError = -1.0
+);
 
   /**
    * Return the timestamp for the scheduler [s] including motor_delay
