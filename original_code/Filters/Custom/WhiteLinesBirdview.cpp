@@ -454,8 +454,7 @@ class ParallelIngegralImageYTraverser : public ParallelLoopBody
 #endif
                                                                                                           
 
-void WhiteLinesBirdview::process() 
-{
+void WhiteLinesBirdview::process() {
 
   //return;
 
