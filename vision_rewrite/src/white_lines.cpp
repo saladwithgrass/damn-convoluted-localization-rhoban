@@ -26,7 +26,7 @@ using cv::Point2i;
 // Assumed width of lines to be detected (in pixels)
 const int LINE_WIDTH_BIRDVIEW = 20;
 // Widnow size orthogonal to traverse direction
-const int WINDOW_HEIGHT_BIRDVIEW = 10;
+const int WINDOW_HEIGHT_BIRDVIEW = 5;
 
 double largestCornerAngleDrift;
 std::vector<WhiteLinesData> loc_data_vector;

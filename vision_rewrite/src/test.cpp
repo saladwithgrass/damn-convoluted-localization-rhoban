@@ -1,3 +1,4 @@
+#include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/core/mat.hpp>
 #include <opencv2/highgui.hpp>
@@ -5,10 +6,25 @@
 #include <opencv2/opencv.hpp>
 #include <vector>
 #include <getopt.h>
+#include <opencv2/core/hal/interface.h>
 #include "prerequisites/prerequisites.hpp"
 #include "white_lines.cpp"
 
+
+
 using cv::Mat;
+
+const std::vector<double> distortion_coeffs = {
+    -0.2742843565205694, 0.015610089528832072, -6.426914987756399e-05, 0.00045607664773090356
+};
+
+double intr_array[] = {
+    1281.3175182001776, 0, 980.2324643557556, 
+    0, 1280.0658685934382,  498.43352671740007,
+    0, 0, 1
+};
+
+const Mat intrinsics = Mat(3, 3, CV_64F, intr_array);
 
 void tune_green_filter(Mat image) {
     Mat green;
@@ -59,7 +75,9 @@ int main (int argc, char *argv[]) {
     }
     std::cout << "processing image" << image_filename << '\n';
     
-    Mat image = cv::imread(image_filename);
+    Mat source = cv::imread(image_filename);
+    Mat image;
+    cv::undistort(source, image, intrinsics, distortion_coeffs);
     image = get_birdview_from_aruco(image);
 
     Mat gray;
