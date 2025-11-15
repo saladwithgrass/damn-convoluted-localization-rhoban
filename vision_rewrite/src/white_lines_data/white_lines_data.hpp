@@ -56,4 +56,5 @@ class WhiteLinesData {
         std::pair<cv::Point2f, cv::Point2f> getSegmentInSelf() const;
         std::pair<cv::Point2f, cv::Point2f> getSegmentInWorld() const;
         float getCornerAngle() const;
+        void define_segment(bool debug_info);
 };

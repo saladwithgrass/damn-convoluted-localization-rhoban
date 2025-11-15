@@ -1,14 +1,17 @@
+#include <eigen3/Eigen/Core>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/core/mat.hpp>
+#include <opencv2/core/types.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/opencv.hpp>
 #include <vector>
 #include <getopt.h>
 #include <opencv2/core/hal/interface.h>
+#include "camera_state/camera_state.hpp"
 #include "prerequisites/prerequisites.hpp"
-#include "white_lines.cpp"
+#include "white_lines/white_lines.hpp"
 
 
 
@@ -26,14 +29,14 @@ double intr_array[] = {
 
 const Mat intrinsics = Mat(3, 3, CV_64F, intr_array);
 
-void tune_green_filter(Mat image) {
+Mat tune_green_filter(Mat image) {
     Mat green;
     const char* winname = "tuning green";
     cv::namedWindow(winname);
 
     int lo_hue = 0;
     int hi_hue = 255;
-    int lo_sat = 0;
+    int lo_sat = 77;
     int hi_sat = 255;
     int lo_val = 0;
     int hi_val = 255;
@@ -48,10 +51,12 @@ void tune_green_filter(Mat image) {
     char key = 0;
     Mat clipped;
     while (key != 'q') {
-        clipped = green_filter_HSV(image, lo_hue, hi_hue, lo_sat, hi_sat);
+        clipped = green_filter_HSV(image, lo_hue, hi_hue, lo_sat, hi_sat, lo_val, hi_val);
         cv::imshow(winname, clipped);
         key = cv::waitKey(1);
     }
+    cv::destroyWindow(winname);
+    return clipped;
 }
 
 int main (int argc, char *argv[]) {
@@ -78,33 +83,37 @@ int main (int argc, char *argv[]) {
     Mat source = cv::imread(image_filename);
     Mat image;
     cv::undistort(source, image, intrinsics, distortion_coeffs);
-    image = get_birdview_from_aruco(image);
+    // image = get_birdview_from_aruco(image);
+    image = tune_rotation_and_position(source);
 
     Mat gray;
     cv::cvtColor(image, gray, cv::COLOR_RGB2GRAY);
     
     Mat integralY;
     Mat YCbCr;
+    Mat Y;
     cv::cvtColor(image, YCbCr, cv::COLOR_BGR2YUV);
     std::vector<Mat> YCbCr_channels(3);
     cv::split(YCbCr, YCbCr_channels);
-    integralY = YCbCr_channels[2];
-    cv::integral(image, integralY);
+    Y = YCbCr_channels[0];
+    cv::integral(Y, integralY);
 
     Mat green_filter;
-    green_filter = green_filter_HSV(image);
+    green_filter = tune_green_filter(image);
     
     // cv::imshow("huh", green_filter);
     // cv::waitKey();
     // cv::destroyAllWindows();
 
-    Mat bird_view = get_birdview_from_aruco(image);
-    cv::imshow("huh", green_filter);
+    // Mat bird_view = get_birdview_from_aruco(image);
+    // cv::imshow("huh", green_filter);
     // cv::waitKey();
     // cv::destroyAllWindows();
+    int px_per_m = 50/0.35;
+    CameraState cs = CameraState(gray, px_per_m);
     std::cout << "begin segmentation\n";
-    segment_white_lines(gray, integralY, green_filter);
-    while (cv::waitKey() != 'q') { }
+    tune_white_lines(gray, integralY, green_filter, &cs);
+    // while (cv::waitKey() != 'q') { }
     cv::destroyAllWindows();
     return 0;
 }

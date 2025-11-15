@@ -2,6 +2,31 @@
 #include <eigen3/Eigen/Eigen>
 #include "camera_state.hpp"
 
+CameraState::CameraState()
+    : birdviewImageSize(cv::Size(1440 / 2, 1080 / 2)),
+      birdviewPixelsInOneMeter(100),
+      unionSquareCenterForBirdviewMeters(Eigen::Vector3d(
+          1.0, 0.0, 0.0))  // make union square center lying in 1.0m away from robot foot in direction of the camera
+
+{
+        unionSquareCenterOnBirdviewPix =
+            cv::Point2f(birdviewImageSize.width / 2 + birdviewPixelsInOneMeter * unionSquareCenterForBirdviewMeters[1],
+                    birdviewImageSize.height - birdviewPixelsInOneMeter * (unionSquareCenterForBirdviewMeters[0] - 0.0));
+}
+
+CameraState::CameraState(
+            cv::Mat image,
+            double px_per_m
+        ) {
+    birdviewImageSize = cv::Size(image.cols, image.rows);
+    birdviewPixelsInOneMeter = px_per_m;
+    unionSquareCenterForBirdviewMeters = 
+        Eigen::Vector3d( 1.0, 0.0, 0.0);  // make union square center lying in 1.0m away from robot foot in direction of the camera
+    unionSquareCenterOnBirdviewPix =
+        cv::Point2f(birdviewImageSize.width / 2 + birdviewPixelsInOneMeter * unionSquareCenterForBirdviewMeters[1],
+                birdviewImageSize.height - birdviewPixelsInOneMeter * (unionSquareCenterForBirdviewMeters[0] - 0.0));
+}
+
 cv::Point2f CameraState::getPosInSelf(const cv::Point2f& pos_in_origin) const {
     Eigen::Vector3d pos_in_self = worldToSelf * 
         Eigen::Vector3d(pos_in_origin.x, pos_in_origin.y, 0);
@@ -17,6 +42,14 @@ cv::Point2f CameraState::worldPosFromBirdviewImg(double imgX, double imgY) {
 }
 
 cv::Point2f CameraState::getUnionSquareCenterOnBirdviewPix() const { return unionSquareCenterOnBirdviewPix; }
+
+double CameraState::getBirdviewPixelsInOneMeter() const {
+    return birdviewPixelsInOneMeter;
+}
+
+double CameraState::getYaw() {
+    return 0;
+}
 
 cv::Point2f CameraState::robotPosFromBirdviewImg(double imgX, double imgY) {
     // Getting coords in m in birdview frame rotated by camera yaw

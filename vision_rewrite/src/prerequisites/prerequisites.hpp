@@ -15,8 +15,19 @@ Mat integral_Y(Mat image);
 Mat green_filter_HSV(
         Mat image, 
         int h_lowerb=GREEN_FILTER_HUE_LOWERB, int h_upperb=GREEN_FILTER_HUE_UPPERB,
-        int s_lowerb=GREEN_FILTER_SAT_LOWERB, int s_upperb=GREEN_FILTER_SAT_UPPERB
+        int s_lowerb=GREEN_FILTER_SAT_LOWERB, int s_upperb=GREEN_FILTER_SAT_UPPERB,
+        int v_lowerb=GREEN_FILTER_SAT_LOWERB, int v_upperb=GREEN_FILTER_SAT_UPPERB
 );
-Mat get_birdview_from_aruco(Mat image);
-Mat get_perspective_tf_from_aruco(Mat image);
 
+Mat get_birdview_from_aruco(Mat image, 
+        std::vector<cv::Point2f> aruco_real_corners);
+Mat get_perspective_tf_from_aruco(Mat image, 
+        std::vector<cv::Point2f> aruco_real_corners);
+Mat tune_rotation_and_position(const Mat& orig);
+void transform_points(
+            const std::vector<cv::Point2f>& pts,
+            std::vector<cv::Point2f>& result,
+            double angle,
+            cv::Point2f center,
+            double scale
+);

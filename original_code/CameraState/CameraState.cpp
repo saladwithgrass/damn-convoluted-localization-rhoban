@@ -67,33 +67,33 @@ CameraState::CameraState(MoveScheduler* moveScheduler) : CameraState() {
 }
 
 CameraState::CameraState(const IntrinsicParameters& camera_parameters, const FrameEntry& frame_entry,
-                         const Pose3D& camera_from_self_pose, const Pose3D& camera_from_head_base_pose,
-                         const hl_communication::VideoSourceID& source_id_, MoveScheduler* moveScheduler)
+        const Pose3D& camera_from_self_pose, const Pose3D& camera_from_head_base_pose,
+        const hl_communication::VideoSourceID& source_id_, MoveScheduler* moveScheduler)
     : CameraState(moveScheduler) {
-  source_id = source_id_;
-  importFromProtobuf(camera_parameters);
-  importFromProtobuf(frame_entry);
+        source_id = source_id_;
+        importFromProtobuf(camera_parameters);
+        importFromProtobuf(frame_entry);
 
-  Eigen::Affine3d cameraFromSelf = getAffineFromProtobuf(camera_from_self_pose);
-  worldToSelf = cameraFromSelf.inverse() * cameraToWorld.inverse();
-  selfToWorld = worldToSelf.inverse();
-  selfToCamera = cameraFromSelf.inverse();
+        Eigen::Affine3d cameraFromSelf = getAffineFromProtobuf(camera_from_self_pose);
+        worldToSelf = cameraFromSelf.inverse() * cameraToWorld.inverse();
+        selfToWorld = worldToSelf.inverse();
+        selfToCamera = cameraFromSelf.inverse();
 
-  cameraFromHeadBase = getAffineFromProtobuf(camera_from_head_base_pose);
-  // Removing correction if needed
-  if (_moveScheduler == nullptr) {
-    throw std::logic_error(DEBUG_INFO + " null movescheduler are not allowed anymore");
-  }
-  ModelService* modelService = _moveScheduler->getServices()->model;
-  if (modelService->applyCorrectionInNonCorrectedReplay) {
-    Eigen::Affine3d worldFromHeadBase = cameraToWorld * cameraFromHeadBase;
-    cameraToWorld = modelService->applyCalibration(cameraToWorld, worldFromHeadBase, selfToWorld);
-    worldToCamera = cameraToWorld.inverse();
-    cameraFromHeadBase = worldToCamera * worldFromHeadBase;
-  }
-  unionSquareCenterOnBirdviewPix =
-      cv::Point2f(birdviewImageSize.width / 2 + birdviewPixelsInOneMeter * unionSquareCenterForBirdviewMeters[1],
-                  birdviewImageSize.height - birdviewPixelsInOneMeter * (unionSquareCenterForBirdviewMeters[0] - 0.0));
+        cameraFromHeadBase = getAffineFromProtobuf(camera_from_head_base_pose);
+        // Removing correction if needed
+        if (_moveScheduler == nullptr) {
+            throw std::logic_error(DEBUG_INFO + " null movescheduler are not allowed anymore");
+        }
+        ModelService* modelService = _moveScheduler->getServices()->model;
+        if (modelService->applyCorrectionInNonCorrectedReplay) {
+            Eigen::Affine3d worldFromHeadBase = cameraToWorld * cameraFromHeadBase;
+            cameraToWorld = modelService->applyCalibration(cameraToWorld, worldFromHeadBase, selfToWorld);
+            worldToCamera = cameraToWorld.inverse();
+            cameraFromHeadBase = worldToCamera * worldFromHeadBase;
+        }
+        unionSquareCenterOnBirdviewPix =
+            cv::Point2f(birdviewImageSize.width / 2 + birdviewPixelsInOneMeter * unionSquareCenterForBirdviewMeters[1],
+                    birdviewImageSize.height - birdviewPixelsInOneMeter * (unionSquareCenterForBirdviewMeters[0] - 0.0));
 }
 
 cv::Size CameraState::getImgSize() const { return getCameraModel().getImgSize(); }

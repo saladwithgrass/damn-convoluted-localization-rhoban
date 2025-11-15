@@ -96,16 +96,64 @@ void WhiteLinesData::computeTransformations(CameraState * cs, bool final_compute
             }
         }
         else {
-            if (final_compute) { FBPRINT_DEBUG(" No corner\n"); }
+            // if (final_compute) { FBPRINT_DEBUG(" No corner\n"); }
             observation_valid = false;
         }
     }
     catch ( const std::exception & e ) {
         // std::cerr << e.what();
-        if (final_compute) { FBPRINT_DEBUG("CBB: exception during computation\n"); }
+        // if (final_compute) { FBPRINT_DEBUG("CBB: exception during computation\n"); }
         rollback_computation();
     }
-    FBPRINT_DEBUG("All is OK\n");
+    // FBPRINT_DEBUG("All is OK\n");
+}
+
+void WhiteLinesData::define_segment(bool debug_info) {
+    hasCorner = false;
+    pix_segment.first = pix_lines[0].first;
+    pix_segment.second = pix_lines[pix_lines.size()-1].second;
+    world_segment.first = world_lines[0].first;
+    world_segment.second = world_lines[world_lines.size()-1].second;  
+    self_segment.first = self_lines[0].first;
+    self_segment.second = self_lines[self_lines.size()-1].second;
+    double len = cv::norm(self_segment.second - self_segment.first);
+
+    cv::Point2f AB = self_segment.first-self_segment.second;
+    double dist_AB = cv::norm(AB);
+    if (dist_AB == 0) return;
+    // TODO: transferer ce calcul dans brut_data, c'est pareil pour chaque particule...
+    cv::Point2f AB_unit = (1.0 / dist_AB) * AB;
+    cv::Point2f AB_ortho_unit(-AB_unit.y, AB_unit.x);
+    double dot_bot_seg = AB_ortho_unit.dot(self_segment.first); 
+    double dist_bot_seg = fabs(dot_bot_seg);
+
+    //std::cout << "WhiteLinesData: dist_bot_seg=" << dist_bot_seg << std::endl; //2019 debug check OK
+
+    double min_len = 0.50;
+    double max_dist = 4.0;
+
+    // Note: parametre on ne regarde pas les segments en dessous de 'min_len'
+    if (len > min_len && dist_bot_seg < max_dist) {
+        if (debug_info) {
+            FBPRINT_DEBUG("Found Segment (%0.2f,%0.2f) -> (%0.2f,%0.2f) (len = %0.2f)\n",
+                    self_segment.first.x,
+                    self_segment.first.y,
+                    self_segment.second.x,
+                    self_segment.second.y,
+                    len);
+        }
+        hasSegment = true;
+        observation_valid &= true;
+    }
+    else {
+        if (len <= min_len) {
+            FBPRINT_DEBUG("segment too short (length=%f m)\n", len);
+        }
+        if (dist_bot_seg >= max_dist) {
+            FBPRINT_DEBUG("segment too far (at dist %0.2f m)\n", dist_bot_seg);
+        }
+    }
+
 }
 
 std::pair<cv::Point2f, cv::Point2f >
