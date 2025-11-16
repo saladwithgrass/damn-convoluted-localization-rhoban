@@ -1,6 +1,7 @@
 #include <vector>
 #include <opencv2/opencv.hpp>
 #include "../camera_state/camera_state.hpp"
+#include "opencv2/core/types.hpp"
 
 class WhiteLinesData {
     private:
@@ -57,4 +58,5 @@ class WhiteLinesData {
         std::pair<cv::Point2f, cv::Point2f> getSegmentInWorld() const;
         float getCornerAngle() const;
         void define_segment(bool debug_info);
+        void draw(cv::Mat canvas, cv::Scalar color, int thickness);
 };

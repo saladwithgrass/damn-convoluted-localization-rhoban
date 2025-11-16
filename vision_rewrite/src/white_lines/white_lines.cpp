@@ -1,7 +1,9 @@
 #include "white_lines.hpp"
+#include <cstddef>
 #include <cstdint>
 #include <eigen3/Eigen/Core>
 #include <opencv2/opencv.hpp>
+#include "opencv2/core/mat.hpp"
 #include "opencv2/core/matx.hpp"
 #include "opencv2/core/types.hpp"
 #include <vector>
@@ -618,7 +620,182 @@ void checkRefineAndDrawCornerCandidate(cv::Mat &im,
 
     }
 
+}
 
+void filter_lines_by_length(vector<Vec4i>& linesP, CameraState* cs, cv::Mat* debug_image=nullptr) {
+    // First stage - fill data exchange vector with filtered line candidates (not corners)
+    for (size_t i = 0; i < linesP.size(); i++) {
+        Vec4i l = linesP[i];
+
+        // Add only lines with appropriate length.
+        // This will filter central circle segments and short sides of goal zone
+        // std::cout << "Found line length = " << my_norm(p0,p1) << "m" << std::endl;
+        float min_pixel_length_on_birdview = cs->getBirdviewPixelsInOneMeter() * 1.5;
+        float min_pixel_length_on_wideangle_full = 175;
+        // float min_real_length = Constants::field.goal_area_length * 1.5;
+        float min_real_length = GOAL_AREA_WIDTH * 1.5;
+
+        // Determining real coords of line start/end (in m)
+        cv::Point2f p0, p1;
+        try {
+            p0 = cs->robotPosFromBirdviewImg(l[0], l[1]);
+            p1 = cs->robotPosFromBirdviewImg(l[2], l[3]);
+        } catch (const std::runtime_error& exc) {
+            std::cout << "Can't do robotPosFromBirdviewImg on Line start/end" << std::endl;
+            continue;
+        }
+
+        // Determining pixel coords of line start/end on a source wideangle image (not birdview),
+        // to filter short false lines found on opponent robots, etc which become "good long" lines after birdview transform
+
+        // Don't work because of frequent "point outsude the theoretical image" error
+        // TODO: bring it back and check on [ln -sf
+        // ~/starkitrobots/workspace/env/starkit3_spinnaker_wideangle/manual_logs/rhobanLegs/ workingLog]
+
+        /*  
+            Eigen::Vector3d pos_self_p0 = Eigen::Vector3d(p0.x, p0.y, 0.0);
+            Eigen::Vector3d pos_self_p1 = Eigen::Vector3d(p1.x, p1.y, 0.0);
+            cv::Point2f wideangle_pixel_pos_p0, wideangle_pixel_pos_p1;
+
+            double pixel_length_on_wideangle_full;
+
+            //try {
+            wideangle_pixel_pos_p0 = cs->imgXYFromSelf(pos_self_p0, Vision::Utils::CAMERA_WIDE_FULL);
+            wideangle_pixel_pos_p1 = cs->imgXYFromSelf(pos_self_p1, Vision::Utils::CAMERA_WIDE_FULL);
+            pixel_length_on_wideangle_full = my_norm(wideangle_pixel_pos_p0, wideangle_pixel_pos_p1);
+            //}
+            //  catch (const std::runtime_error& exc)
+            //{
+            //  std::cout << "Can't do imgXYFromSelf on Line start/end" << std::endl;
+            //  //continue;
+            //  pixel_length_on_wideangle_full = 1000; //Fake large length
+            //}
+        */
+
+        // std::cout << "p0=" << p0 << std::endl;
+        // std::cout << "p1=" << p1 << std::endl;
+        // std::cout << "my_norm=" << my_norm(p0, p1) << std::endl;
+        if (my_norm(p0, p1) < min_real_length) continue;
+
+        // std::cout << "birdview_p0=" << cv::Point2f(l[0], l[1]) << std::endl;
+        // std::cout << "birdview_p1=" << cv::Point2f(l[2], l[3]) << std::endl;
+        // std::cout << "my_norm=" << my_norm(cv::Point2f(l[0], l[1]), cv::Point2f(l[2], l[3])) << std::endl;
+        if (my_norm(cv::Point2f(l[0], l[1]), cv::Point2f(l[2], l[3])) < min_pixel_length_on_birdview) continue;
+
+        // std::cout << "wideangle_pixel_pos_p0=" << wideangle_pixel_pos_p0 << std::endl;
+        /// std::cout << "wideangle_pixel_pos_p1=" << wideangle_pixel_pos_p1 << std::endl;
+        // std::cout << "pixel_length_on_wideangle_full=" << pixel_length_on_wideangle_full << std::endl;
+        // if( pixel_length_on_wideangle_full < min_pixel_length_on_wideangle_full) continue;
+
+        cv::Point2f Uf(((float)l[0]), ((float)l[1]));  // 2019
+        cv::Point2f Vf(((float)l[2]), ((float)l[3]));  // 2019
+
+        // Creatin WhiteLinesData object, it can contains one or two lines and zero or one corner.
+        // For now add only lines
+        float dummy_quality = 1.0;
+        WhiteLinesData whiteLinesData = WhiteLinesData();
+        whiteLinesData.max_dist_corner = 10.0;
+        whiteLinesData.tolerance_angle_line = 20.0;     // 10.0;
+        whiteLinesData.tolerance_angle_corner = 25.0;   // 15.0;
+        whiteLinesData.minimal_segment_length = 0.001;  // 0.3;
+        if (l[1] > l[3])
+            whiteLinesData.pushPixLine(dummy_quality, std::pair<cv::Point2f, cv::Point2f>(Uf, Vf));
+        else
+            whiteLinesData.pushPixLine(dummy_quality, std::pair<cv::Point2f, cv::Point2f>(Vf, Uf));
+        loc_data_vector.push_back(whiteLinesData);
+
+        // Draw the line being pushed to localisation in bold yellow
+        if (debug_image != nullptr)
+            line(*debug_image, Point(l[0], l[1]), Point(l[2], l[3]), cv::Scalar(0, 255, 255), 4, cv::LINE_AA);
+    }
+}
+
+void filter_corners(std::vector<CornerCandidate> cornerCandidates, Mat& im, CameraState* cs) {
+        // Second stage - fill data exchange vector with filtered corner candidates
+        for (size_t i = 0; i < cornerCandidates.size(); i++) {
+            if (cornerCandidates[i].valid) {
+                // For whiteLinesData.cpp only Ufa-C-Vfb points is needed
+                cv::Point2f Ufa;
+                cv::Point2f Vfb;
+                cv::Point2f C;
+
+                checkRefineAndDrawCornerCandidate(
+                        im, 
+                        cornerCandidates[i].ufa, 
+                        cornerCandidates[i].vfa,
+                        cornerCandidates[i].corner, 
+                        &Ufa, &Vfb, &C, cs
+                );
+
+                checkRefineAndDrawCornerCandidate(im, cornerCandidates[i].ufa, cornerCandidates[i].vfb,
+                        cornerCandidates[i].corner, &Ufa, &Vfb, &C, cs);
+                checkRefineAndDrawCornerCandidate(im, cornerCandidates[i].ufb, cornerCandidates[i].vfb,
+                        cornerCandidates[i].corner, &Ufa, &Vfb, &C, cs);
+                checkRefineAndDrawCornerCandidate(im, cornerCandidates[i].ufb, cornerCandidates[i].vfa,
+                        cornerCandidates[i].corner, &Ufa, &Vfb, &C, cs);
+
+                /*
+                //For now localisation module accepts only L-shaped corners.
+                //Angle from "a" line to "b" line should be clockwise
+                //So let's convert found corner (it can be X-shape, L-shape or T-shape) to L-shape with proper line order
+                cv::Point2f Ufa = cornerCandidates[i].ufa;
+                cv::Point2f Vfa = cornerCandidates[i].vfa;
+                cv::Point2f Ufb = cornerCandidates[i].ufb;
+                cv::Point2f Vfb = cornerCandidates[i].vfb;
+                cv::Point2f C = cornerCandidates[i].corner;
+
+                //Cutting lengths of shortest segments in T/X-spaed corner to convert it to L-shaped
+                //Corner will be processed as Ua-C-Vb notation in WhiteLiesCornerobservation.cpp, so Ub/Va values are useless
+                float norm_a1 = my_norm(Ufa,C);
+                float norm_a2 = my_norm(Vfa,C);
+                if(norm_a1>norm_a2) Vfa = C; else { Ufa = Vfa; Vfa = C; };
+
+                float norm_b1 = my_norm(Ufb,C);
+                float norm_b2 = my_norm(Vfb,C);
+                if(norm_b2>norm_b1) Ufb = C; else { Vfb = Ufb; Ufb = C; };
+
+                //Angle from Ufa-C vector to Vfb-C vector should be anti-clockwise,
+                //overwise calculations of corner orientation in WhiteLiesCornerobservation.cpp will be wrong.
+                //So let's correct each corner by cross product (=vector multiplication) z-component sign check
+                cv::Point2f a = Ufa-C;
+                cv::Point2f b = Vfb-C;
+                double cross_product_z_component = a.x * b.y - b.x * a.y;
+                if(cross_product_z_component>0) {
+                //We need to swap Ufa and Vfb
+                cv::Point2f t;
+                t = Vfb;
+                Vfb = Ufa;
+                Ufa = t;
+                }
+                //Drawing raw corner (without conversion to L-shape) in bold green
+                line( im, Point(cornerCandidates[i].ufa.x, cornerCandidates[i].ufa.y),
+                Point(cornerCandidates[i].vfa.x, cornerCandidates[i].vfa.y), Scalar(0,255,0), 1);
+                line( im, Point(cornerCandidates[i].ufb.x, cornerCandidates[i].ufb.y),
+                Point(cornerCandidates[i].vfb.x, cornerCandidates[i].vfb.y), Scalar(0,255,0), 1);
+                //circle(im, Point(cornerCandidates[i].corner.x, cornerCandidates[i].corner.y), 5, Scalar(0,0,255), -1);
+                //Drawing triangle base for better corner visibility
+                line( im, Point(Ufa.x, Ufa.y),
+                Point(Vfb.x, Vfb.y), Scalar(125,255,0), 1);
+
+                //Drawing corner with conversion to L-shape
+                //Angle from red to pink should be clockwise
+                line( im, Point(Ufa.x, Ufa.y),
+                Point(C.x, C.y), Scalar(0,0,255), 2);
+                line( im, Point(Vfb.x, Vfb.y),
+                Point(C.x, C.y), Scalar(0,128,255), 2);
+
+                //Creating WhiteLinesData object, it can contains one or two lines and zero or one corner. Only corners is used by
+                now float dummy_quality = 1.0; WhiteLinesData whiteLinesData = WhiteLinesData(); whiteLinesData.max_dist_corner
+                = 10.0; whiteLinesData.tolerance_angle_line = 20.0; //10.0; whiteLinesData.tolerance_angle_corner = 25.0; //15.0;
+                whiteLinesData.minimal_segment_length = 0.001; //0.3;
+                whiteLinesData.pushPixLine(dummy_quality, std::pair<cv::Point2f,cv::Point2f>(Ufa,Vfa));
+                whiteLinesData.pushPixLine(dummy_quality, std::pair<cv::Point2f,cv::Point2f>(Ufb,Vfb));
+                whiteLinesData.addPixCorner(C); //This will automatically set has_corner to true
+
+                loc_data_vector.push_back(whiteLinesData);
+                */
+            }
+        }
 }
 
 uint32_t frame_n = 0;
@@ -854,89 +1031,7 @@ void segment_white_lines(
 
 #define USE_LINES 1
 #if USE_LINES
-        // First stage - fill data exchange vector with filtered line candidates (not corners)
-        for (size_t i = 0; i < linesP.size(); i++) {
-            Vec4i l = linesP[i];
-
-            // Add only lines with appropriate length.
-            // This will filter central circle segments and short sides of goal zone
-            // std::cout << "Found line length = " << my_norm(p0,p1) << "m" << std::endl;
-            float min_pixel_length_on_birdview = cs->getBirdviewPixelsInOneMeter() * 1.5;
-            float min_pixel_length_on_wideangle_full = 175;
-            // float min_real_length = Constants::field.goal_area_length * 1.5;
-            float min_real_length = GOAL_AREA_WIDTH * 1.5;
-
-            // Determining real coords of line start/end (in m)
-            cv::Point2f p0, p1;
-            try {
-                p0 = cs->robotPosFromBirdviewImg(l[0], l[1]);
-                p1 = cs->robotPosFromBirdviewImg(l[2], l[3]);
-            } catch (const std::runtime_error& exc) {
-                std::cout << "Can't do robotPosFromBirdviewImg on Line start/end" << std::endl;
-                continue;
-            }
-
-            // Determining pixel coords of line start/end on a source wideangle image (not birdview),
-            // to filter short false lines found on opponent robots, etc which become "good long" lines after birdview transform
-
-            // Don't work because of frequent "point outsude the theoretical image" error
-            // TODO: bring it back and check on [ln -sf
-            // ~/starkitrobots/workspace/env/starkit3_spinnaker_wideangle/manual_logs/rhobanLegs/ workingLog]
-
-            /*Eigen::Vector3d pos_self_p0 = Eigen::Vector3d(p0.x, p0.y, 0.0);
-              Eigen::Vector3d pos_self_p1 = Eigen::Vector3d(p1.x, p1.y, 0.0);
-              cv::Point2f wideangle_pixel_pos_p0, wideangle_pixel_pos_p1;
-
-              double pixel_length_on_wideangle_full;
-
-            //try {
-            wideangle_pixel_pos_p0 = cs->imgXYFromSelf(pos_self_p0, Vision::Utils::CAMERA_WIDE_FULL);
-            wideangle_pixel_pos_p1 = cs->imgXYFromSelf(pos_self_p1, Vision::Utils::CAMERA_WIDE_FULL);
-            pixel_length_on_wideangle_full = my_norm(wideangle_pixel_pos_p0, wideangle_pixel_pos_p1);
-            //}
-            //  catch (const std::runtime_error& exc)
-            //{
-            //  std::cout << "Can't do imgXYFromSelf on Line start/end" << std::endl;
-            //  //continue;
-            //  pixel_length_on_wideangle_full = 1000; //Fake large length
-            //}
-            */
-
-            // std::cout << "p0=" << p0 << std::endl;
-            // std::cout << "p1=" << p1 << std::endl;
-            // std::cout << "my_norm=" << my_norm(p0, p1) << std::endl;
-            if (my_norm(p0, p1) < min_real_length) continue;
-
-            // std::cout << "birdview_p0=" << cv::Point2f(l[0], l[1]) << std::endl;
-            // std::cout << "birdview_p1=" << cv::Point2f(l[2], l[3]) << std::endl;
-            // std::cout << "my_norm=" << my_norm(cv::Point2f(l[0], l[1]), cv::Point2f(l[2], l[3])) << std::endl;
-            if (my_norm(cv::Point2f(l[0], l[1]), cv::Point2f(l[2], l[3])) < min_pixel_length_on_birdview) continue;
-
-            // std::cout << "wideangle_pixel_pos_p0=" << wideangle_pixel_pos_p0 << std::endl;
-            /// std::cout << "wideangle_pixel_pos_p1=" << wideangle_pixel_pos_p1 << std::endl;
-            // std::cout << "pixel_length_on_wideangle_full=" << pixel_length_on_wideangle_full << std::endl;
-            // if( pixel_length_on_wideangle_full < min_pixel_length_on_wideangle_full) continue;
-
-            cv::Point2f Uf(((float)l[0]), ((float)l[1]));  // 2019
-            cv::Point2f Vf(((float)l[2]), ((float)l[3]));  // 2019
-
-            // Creatin WhiteLinesData object, it can contains one or two lines and zero or one corner.
-            // For now add only lines
-            float dummy_quality = 1.0;
-            WhiteLinesData whiteLinesData = WhiteLinesData();
-            whiteLinesData.max_dist_corner = 10.0;
-            whiteLinesData.tolerance_angle_line = 20.0;     // 10.0;
-            whiteLinesData.tolerance_angle_corner = 25.0;   // 15.0;
-            whiteLinesData.minimal_segment_length = 0.001;  // 0.3;
-            if (l[1] > l[3])
-                whiteLinesData.pushPixLine(dummy_quality, std::pair<cv::Point2f, cv::Point2f>(Uf, Vf));
-            else
-                whiteLinesData.pushPixLine(dummy_quality, std::pair<cv::Point2f, cv::Point2f>(Vf, Uf));
-            loc_data_vector.push_back(whiteLinesData);
-
-            // Draw the line being pushed to localisation in bold yellow
-            line(im, Point(l[0], l[1]), Point(l[2], l[3]), cv::Scalar(0, 255, 255), 4, cv::LINE_AA);
-        }
+        filter_lines_by_length(linesP, cs, &im);
 #endif
 
 #define USE_CORNERS 1
@@ -1070,5 +1165,9 @@ void segment_white_lines(
 //------------------------------------------------------------------------------
 
         // std::cout << "-------------- WHITE LINES PROCRESS() EXIT ------------" << std::endl;
+        for (int i = 0; i < loc_data_vector.size(); ++i) {
+            // loc_data_vector[i].draw(im, {255, 255,0}, 5);
+        }
+        cv::imshow(winname, im);
 
 }

@@ -1,5 +1,17 @@
 #include "white_lines_data.hpp"
 #include <opencv2/opencv.hpp>
+#include <cmath>
+#include "opencv2/core/types.hpp"
+
+double deg2rad(double deg) {
+    return M_PI * deg / 180.;
+}
+
+void WhiteLinesData::draw(cv::Mat canvas, const cv::Scalar color, int thickness=1) {
+    for (int i = 0; i < pix_lines.size(); ++i) {
+        cv::line(canvas, this->pix_lines[i].first, this->pix_lines[i].second, color, thickness);
+    }
+}
 
 WhiteLinesData::WhiteLinesData() {
   loc_active = true;
@@ -54,21 +66,21 @@ void WhiteLinesData::computeTransformations(CameraState * cs, bool final_compute
                 float CA = cv::norm(A-self_corner);
                 float CB = cv::norm(B-self_corner);
                 float AB = cv::norm(B-A);
-                if (final_compute) {
-                    FBPRINT_DEBUG("distances : CA=%f CB=%f AB=%f dist(corner)=%f\n", CA, CB, AB, cv::norm(self_corner));
-                }
+                // if (final_compute) {
+                //     printf("distances : CA=%f CB=%f AB=%f dist(corner)=%f\n", CA, CB, AB, cv::norm(self_corner));
+                // }
                 if (CA != 0 && CB != 0) {
                     float co = (CA*CA + CB*CB - AB*AB)/ (2*CA*CB);
                     if (co < -1.0) co = -1.0; 
                     if (co > 1.0) co = 1.0;
                     corner_angle = acos(co);
-                    if (final_compute) {
-                        FBPRINT_DEBUG("Corrected Corner angle (ACB) = %f\n", 180.0 / M_PI * corner_angle);
-                    }
+                    // if (final_compute) {
+                    //     printf("Corrected Corner angle (ACB) = %f\n", 180.0 / M_PI * corner_angle);
+                    // }
                     if (fabs(M_PI/2 - corner_angle) > deg2rad(tolerance_angle_corner) // TODO: parametre
                             || CA < minimal_segment_length || CB < minimal_segment_length ) {
                         if (final_compute) {
-                            FBPRINT_DEBUG("Corner avoided (bad angle or segment too short)\n");
+                            printf("Corner avoided (bad angle or segment too short)\n");
                         }
                         hasCorner = false;
                         observation_valid = false;
@@ -76,7 +88,7 @@ void WhiteLinesData::computeTransformations(CameraState * cs, bool final_compute
 
                     if (corner_robot_dist > max_dist_corner) {
                         if (final_compute) { 
-                            FBPRINT_DEBUG("Corner avoided : it is too far : seen at %f\n", corner_robot_dist); 
+                            printf("Corner avoided : it is too far : seen at %f\n", corner_robot_dist); 
                         }
                         observation_valid = false;
                     }
@@ -88,24 +100,24 @@ void WhiteLinesData::computeTransformations(CameraState * cs, bool final_compute
                 } else {
                     hasCorner = false;
                     observation_valid = false;
-                    if (final_compute) { FBPRINT_DEBUG("Segment are too short\n"); }
+                    if (final_compute) { printf("Segment are too short\n"); }
                 }
             } else {
                 hasCorner = false;
-                if (final_compute) { FBPRINT_DEBUG("There is only one line\n"); }
+                if (final_compute) { printf("There is only one line\n"); }
             }
         }
         else {
-            // if (final_compute) { FBPRINT_DEBUG(" No corner\n"); }
+            // if (final_compute) { printf(" No corner\n"); }
             observation_valid = false;
         }
     }
     catch ( const std::exception & e ) {
         // std::cerr << e.what();
-        // if (final_compute) { FBPRINT_DEBUG("CBB: exception during computation\n"); }
+        // if (final_compute) { printf("CBB: exception during computation\n"); }
         rollback_computation();
     }
-    // FBPRINT_DEBUG("All is OK\n");
+    // printf("All is OK\n");
 }
 
 void WhiteLinesData::define_segment(bool debug_info) {
@@ -135,7 +147,7 @@ void WhiteLinesData::define_segment(bool debug_info) {
     // Note: parametre on ne regarde pas les segments en dessous de 'min_len'
     if (len > min_len && dist_bot_seg < max_dist) {
         if (debug_info) {
-            FBPRINT_DEBUG("Found Segment (%0.2f,%0.2f) -> (%0.2f,%0.2f) (len = %0.2f)\n",
+            printf("Found Segment (%0.2f,%0.2f) -> (%0.2f,%0.2f) (len = %0.2f)\n",
                     self_segment.first.x,
                     self_segment.first.y,
                     self_segment.second.x,
@@ -147,10 +159,10 @@ void WhiteLinesData::define_segment(bool debug_info) {
     }
     else {
         if (len <= min_len) {
-            FBPRINT_DEBUG("segment too short (length=%f m)\n", len);
+            printf("segment too short (length=%f m)\n", len);
         }
         if (dist_bot_seg >= max_dist) {
-            FBPRINT_DEBUG("segment too far (at dist %0.2f m)\n", dist_bot_seg);
+            printf("segment too far (at dist %0.2f m)\n", dist_bot_seg);
         }
     }
 
@@ -240,5 +252,3 @@ bool WhiteLinesData::is_obs_valid() {
   return loc_active && observation_valid;
 }
   
-}
-}
